@@ -46,6 +46,7 @@ data TType = TBool
            deriving (Eq, Show)
 
 data Error = TypeError
+           | UnboundVariableError Idx
            | UnreachableError
            deriving (Show)
 
