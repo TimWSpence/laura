@@ -22,8 +22,10 @@ eval e = typecheck e >> (runExcept . flip runReaderT emptyEnv $ eval_ e)
 
 -- We assume that the expression is well-typed
 -- TODO check that env does not already have a binding for idx?
+-- TODO need relabelling and to actually use De Bruijn indices?
 eval_ :: (MonadReader Env m, MonadError Error m) => Expr -> m Expr
 eval_ e@(Lit _) = return e
+eval_ (NumOp e) = evalNumericBuiltin e
 eval_ (Var idx) = do
   e <- reader (Map.lookup idx . getEnv)
   maybe (throwError $ UnboundVariableError idx) return e
@@ -40,4 +42,14 @@ eval_ (If cond e1 e2) = do
 eval_ (Let (Var idx) _ e1 e2) = do
   bind <- eval_ e1
   local (extendEnv idx bind) (eval_ e2)
+eval_ (Proj name (ERecord fields)) = maybe (throwError UnreachableError) (return . Lit) (Map.lookup name fields)
 eval_ _ = throwError UnreachableError
+
+--TODO complete this
+evalNumericBuiltin :: (MonadReader Env m, MonadError Error m) => NumericBuiltin -> m Expr
+evalNumericBuiltin (Plus e1 e2) = do
+  v1 <- eval_ e1
+  v2 <- eval_ e2
+  case (v1, v2) of
+    (Lit (EInt n), Lit (EInt m)) -> return . Lit $ EInt (m + n)
+    _ -> throwError UnreachableError

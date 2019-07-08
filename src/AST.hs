@@ -18,6 +18,7 @@ module AST (
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import qualified Data.Map             as Map
+import           Data.Traversable
 
 -- TODO add support for following (derived where possible)
 -- fix (can't be typed if defined in pure lambda calculus so must be built-in)
@@ -34,6 +35,9 @@ import qualified Data.Map             as Map
 -- Might use De Bruijn indices to avoid a whole host of alpha substitution problems
 newtype Idx = Idx { getIdx :: Int } deriving (Eq, Ord, Num, Show)
 
+type Field = String
+
+-- TODO separate concept of values and expressions?
 data Expr = Lit Lit
           | Var Idx
           | Lam Expr TType Expr
@@ -41,12 +45,14 @@ data Expr = Lit Lit
           | If Expr Expr Expr
           | Let Expr TType Expr Expr -- can't be represented by Lam/App in typed lambda calculus (without type inference)
           | NumOp NumericBuiltin
+          | Proj Field Lit
           deriving (Eq, Show)
 
 data Lit = ETrue
          | EFalse
          | EInt Int
          | EFloat Float
+         | ERecord (Map.Map Field Lit)
          deriving (Eq, Show)
 
 data NumericBuiltin = Plus Expr Expr
@@ -60,6 +66,7 @@ data NumericBuiltin = Plus Expr Expr
 data TType = TBool
            | TInt
            | TFloat
+           | TRecord (Map.Map Field TType)
            | TFn TType TType
            deriving (Eq, Show)
 
@@ -84,6 +91,7 @@ typecheck_ (Lit ETrue)         = return TBool
 typecheck_ (Lit EFalse)        = return TBool
 typecheck_ (Lit (EInt _))      = return TInt
 typecheck_ (Lit (EFloat _))    = return TFloat
+typecheck_ (Lit (ERecord fields))    = TRecord <$> Map.traverseWithKey (\_ v -> typecheck_ (Lit v)) fields
 typecheck_ (NumOp e) = typecheckNumericBuiltin e
 typecheck_ (Var idx) = do
   tpe <- reader (Map.lookup idx . getEnv)
@@ -102,6 +110,11 @@ typecheck_ (If cond tru fls) = do
   if (t1 /= TBool || t2 /= t3) then throwError TypeError else return ()
   return t2
 typecheck_ (Let (Var idx) tpe _ e) = local (extendEnv idx tpe) (typecheck_ e)
+typecheck_ (Proj name e@(ERecord fields)) = do
+  t <- typecheck_ (Lit e)
+  case t of
+    (TRecord tpes) -> maybe (throwError TypeError) return (Map.lookup name tpes)
+    _ -> throwError TypeError
 typecheck_  _                   = throwError TypeError
 
 -- I don't believe we have a better way to do this without going down the System F route to support polymorphism
