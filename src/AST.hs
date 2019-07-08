@@ -1,5 +1,9 @@
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase                 #-}
+{-# LANGUAGE RankNTypes                 #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TypeApplications           #-}
 
 module AST (
   Expr(..),
@@ -7,6 +11,7 @@ module AST (
   TType(..),
   Error(..),
   Idx(..),
+  NumericBuiltin(..),
   typecheck
                ) where
 
@@ -22,9 +27,11 @@ import qualified Data.Map             as Map
 -- sum types
 -- string type
 -- float type
+-- parametric polymorphism
+-- subtyping
 -- other types?
 
--- Use De Bruijn indices to avoid a whole host of alpha substitution problems
+-- Might use De Bruijn indices to avoid a whole host of alpha substitution problems
 newtype Idx = Idx { getIdx :: Int } deriving (Eq, Ord, Num, Show)
 
 data Expr = Lit Lit
@@ -33,15 +40,26 @@ data Expr = Lit Lit
           | App Expr Expr
           | If Expr Expr Expr
           | Let Expr TType Expr Expr -- can't be represented by Lam/App in typed lambda calculus (without type inference)
+          | NumOp NumericBuiltin
           deriving (Eq, Show)
 
 data Lit = ETrue
          | EFalse
          | EInt Int
+         | EFloat Float
          deriving (Eq, Show)
+
+data NumericBuiltin = Plus Expr Expr
+                    | Minus Expr Expr
+                    | Neg Expr
+                    | Times Expr Expr
+                    | Div Expr Expr
+                    | Mod Expr Expr
+                    deriving (Eq, Show)
 
 data TType = TBool
            | TInt
+           | TFloat
            | TFn TType TType
            deriving (Eq, Show)
 
@@ -65,6 +83,8 @@ typecheck_ :: (MonadError Error m, MonadReader Env m) => Expr -> m TType
 typecheck_ (Lit ETrue)         = return TBool
 typecheck_ (Lit EFalse)        = return TBool
 typecheck_ (Lit (EInt _))      = return TInt
+typecheck_ (Lit (EFloat _))    = return TFloat
+typecheck_ (NumOp e) = typecheckNumericBuiltin e
 typecheck_ (Var idx) = do
   tpe <- reader (Map.lookup idx . getEnv)
   maybe (throwError TypeError) return tpe
@@ -83,3 +103,32 @@ typecheck_ (If cond tru fls) = do
   return t2
 typecheck_ (Let (Var idx) tpe _ e) = local (extendEnv idx tpe) (typecheck_ e)
 typecheck_  _                   = throwError TypeError
+
+-- I don't believe we have a better way to do this without going down the System F route to support polymorphism
+typecheckNumericBuiltin :: forall m. (MonadError Error m, MonadReader Env m) => NumericBuiltin -> m TType
+typecheckNumericBuiltin e = case e of
+  (Plus e1 e2)  -> checkInfix e1 e2
+  (Minus e1 e2) -> checkInfix e1 e2
+  (Times e1 e2) -> checkInfix e1 e2
+  (Div e1 e2)   -> checkInfix e1 e2
+  (Mod e1 e2)   -> checkInfix e1 e2
+  (Neg e1)      -> checkPrefix e1
+  where
+    checkInfix :: Expr -> Expr -> m TType
+    checkInfix e1 e2 = do
+      t1 <- typecheck_ @m e1
+      t2 <- typecheck_ e2
+      case (t1, t2) of
+        (TInt, TInt)     -> return TInt
+        (TInt, TFloat)   -> return TFloat
+        (TFloat, TInt)   -> return TFloat
+        (TFloat, TFloat) -> return TFloat
+        _                -> throwError TypeError
+
+    checkPrefix :: Expr -> m TType
+    checkPrefix e = do
+        t <- typecheck_ e
+        case t of
+          TInt   -> return TInt
+          TFloat -> return TFloat
+          _      -> throwError TypeError
